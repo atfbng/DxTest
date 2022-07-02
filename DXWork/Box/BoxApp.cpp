@@ -46,6 +46,7 @@ private:
     virtual void OnMouseUp(WPARAM btnState, int x, int y)override;
     virtual void OnMouseMove(WPARAM btnState, int x, int y)override;
 
+    void LoadTexture();
     void BuildDescriptorHeaps();
     void BuildConstantBuffers();
     void BuildRootSignature();
@@ -80,7 +81,7 @@ private:
     POINT mLastMousePos;
 };
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
+/*int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
     PSTR cmdLine, int showCmd)
 {
     // Enable run-time memory check for debug builds.
@@ -101,7 +102,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE prevInstance,
         MessageBox(nullptr, e.ToString().c_str(), L"HR Failed", MB_OK);
         return 0;
     }
-}
+}*/
 
 BoxApp::BoxApp(HINSTANCE hInstance)
     : D3DApp(hInstance)
@@ -275,6 +276,11 @@ void BoxApp::OnMouseMove(WPARAM btnState, int x, int y)
 
     mLastMousePos.x = x;
     mLastMousePos.y = y;
+}
+
+void BoxApp::LoadTexture()
+{
+    
 }
 
 void BoxApp::BuildDescriptorHeaps()

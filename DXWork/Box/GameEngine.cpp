@@ -1,10 +1,47 @@
 #include "../../Common/d3dApp.h"
 #include "../../Common/MathHelper.h"
 #include "../../Common/UploadBuffer.h"
+#include "../../Common/GeometryGenerator.h"
+#include "FrameResource.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 using namespace DirectX::PackedVector;
+
+const int gNumFrameResources = 3;
+
+struct RenderItem
+{
+    RenderItem() = default;
+    RenderItem(const RenderItem& rhs) = delete;
+
+    // World matrix of the shape that describes the object's local space
+    // relative to the world space, which defines the position, orientation,
+    // and scale of the object in the world.
+    XMFLOAT4X4 World = MathHelper::Identity4x4();
+
+    XMFLOAT4X4 TexTransform = MathHelper::Identity4x4();
+
+    // Dirty flag indicating the object data has changed and we need to update the constant buffer.
+    // Because we have an object cbuffer for each FrameResource, we have to apply the
+    // update to each FrameResource.  Thus, when we modify obect data we should set 
+    // NumFramesDirty = gNumFrameResources so that each frame resource gets the update.
+    int NumFramesDirty = gNumFrameResources;
+
+    // Index into GPU constant buffer corresponding to the ObjectCB for this render item.
+    UINT ObjCBIndex = -1;
+
+    Material* Mat = nullptr;
+    MeshGeometry* Geo = nullptr;
+
+    // Primitive topology.
+    D3D12_PRIMITIVE_TOPOLOGY PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+    // DrawIndexedInstanced parameters.
+    UINT IndexCount = 0;
+    UINT StartIndexLocation = 0;
+    int BaseVertexLocation = 0;
+};
 
 class GameEngine : public D3DApp
 {
@@ -30,22 +67,39 @@ private:
     //GameEngine Initial
     void LoadTexture();
     void BuildDescriptorHeaps();
-    void BuildConstantBuffers();
+    //void BuildConstantBuffers();
     void BuildRootSignature();
     void BuildShadersAndInputLayout();
-    void BuildBoxGeometry();
+    void BuildGeometry();
+    void BuildMaterials();
     void BuildPSO();
+    void BuildRenderItems();
+    void BuildFrameResources();
 
+    //GameEngine Update
+    void UpdateObjectCBs(const GameTimer& gt);
+    void UpdateMaterialBuffer(const GameTimer& gt);
+    void UpdateMainPassCB(const GameTimer& gt);
+
+    std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GetStaticSamplers();
 private:
     //Pipeline Need
-    ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
-    ComPtr<ID3D12DescriptorHeap> mCbvHeap = nullptr;
+    std::vector<std::unique_ptr<FrameResource>> mFrameResources;
+    FrameResource* mCurrFrameResource = nullptr;
+    int mCurrFrameResourceIndex = 0;
 
-    ComPtr<ID3DBlob> mvsByteCode = nullptr;
-    ComPtr<ID3DBlob> mpsByteCode = nullptr;
+    ComPtr<ID3D12RootSignature> mRootSignature = nullptr;
+    ComPtr<ID3D12DescriptorHeap> mSrvDescriptorHeap = nullptr;
 
     std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
 
+    std::vector<std::unique_ptr<RenderItem>> mAllRitems;
+
+    //Geometry Management
+    std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
+    std::unordered_map<std::string, std::unique_ptr<Material>> mMaterials;
+    std::unordered_map<std::string, std::unique_ptr<Texture>> mTextures;
+    std::unordered_map<std::string, ComPtr<ID3DBlob>> mShaders;
     std::unordered_map<std::string, ComPtr<ID3D12PipelineState>> mPSOs;
 
     POINT mLastMousePos;
@@ -100,6 +154,16 @@ bool GameEngine::Initialize() {
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
+    BuildGeometry();
+    BuildMaterials();
+    BuildShadersAndInputLayout();
+    BuildDescriptorHeaps();
+    BuildRootSignature();
+    BuildRenderItems();
+    BuildPSO();
+
+
+
     // Execute the initialization commands.
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -124,8 +188,48 @@ void GameEngine::OnMouseMove(WPARAM btnState, int x, int y) {
 
 }
 void GameEngine::Update(const GameTimer& gt) {
+    //commit objconstant commit camera and light commit materials
+    mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
+    mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
 
-    //BuildPSO();
+    if (mCurrFrameResource->Fence != 0 && mFence->GetCompletedValue() < mCurrFrameResource->Fence)
+    {
+        HANDLE eventHandle = CreateEventEx(nullptr, false, false, EVENT_ALL_ACCESS);
+        ThrowIfFailed(mFence->SetEventOnCompletion(mCurrFrameResource->Fence, eventHandle));
+        WaitForSingleObject(eventHandle, INFINITE);
+        CloseHandle(eventHandle);
+    }
+
+    UpdateObjectCBs(gt);
+    UpdateMaterialBuffer(gt);
+    UpdateMainPassCB(gt);
+}
+void GameEngine::UpdateObjectCBs(const GameTimer& gt) {
+    auto currObjectCB = mCurrFrameResource->ObjectCB.get();
+    for (auto& e : mAllRitems)
+    {
+        if (e->NumFramesDirty > 0)
+        {
+            XMMATRIX world = XMLoadFloat4x4(&e->World);
+            XMMATRIX texTransform = XMLoadFloat4x4(&e->TexTransform);
+
+            ObjectConstants objConstants;
+            XMStoreFloat4x4(&objConstants.World, XMMatrixTranspose(world));
+            XMStoreFloat4x4(&objConstants.TexTransform, XMMatrixTranspose(texTransform));
+            objConstants.MaterialIndex = e->Mat->MatCBIndex;
+
+            currObjectCB->CopyData(e->ObjCBIndex, objConstants);
+
+            // Next FrameResource need to be updated too.
+            e->NumFramesDirty--;
+        }
+    }
+}
+
+void GameEngine::UpdateMaterialBuffer(const GameTimer& gt) {
+}
+
+void GameEngine::UpdateMainPassCB(const GameTimer& gt) {
 }
 
 void GameEngine::Draw(const GameTimer& gt) {
@@ -165,5 +269,431 @@ void GameEngine::Draw(const GameTimer& gt) {
 void GameEngine::BuildPSO() {
     D3D12_GRAPHICS_PIPELINE_STATE_DESC basePsoDesc;
     ZeroMemory(&basePsoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
-    
+    basePsoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
+    basePsoDesc.pRootSignature = mRootSignature.Get();
+    basePsoDesc.VS =
+    {
+        reinterpret_cast<BYTE*>(mShaders["standardVS"]->GetBufferPointer()),
+        mShaders["standardVS"]->GetBufferSize()
+    };
+    basePsoDesc.PS =
+    {
+        reinterpret_cast<BYTE*>(mShaders["opaquePS"]->GetBufferPointer()),
+        mShaders["opaquePS"]->GetBufferSize()
+    };
+    basePsoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    basePsoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    basePsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
+    basePsoDesc.SampleMask = UINT_MAX;
+    basePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    basePsoDesc.NumRenderTargets = 1;
+    basePsoDesc.RTVFormats[0] = mBackBufferFormat;
+    basePsoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
+    basePsoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
+    basePsoDesc.DSVFormat = mDepthStencilFormat;
+
+    //PSO for opaque objects.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc = basePsoDesc;
+    opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
+    opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
+}
+
+void GameEngine::BuildGeometry() {
+    GeometryGenerator geoGen;
+    GeometryGenerator::MeshData box = geoGen.CreateBox(1.0f, 1.0f, 1.0f, 3);
+    GeometryGenerator::MeshData grid = geoGen.CreateGrid(20.0f, 30.0f, 60, 40);
+    GeometryGenerator::MeshData sphere = geoGen.CreateSphere(0.5f, 20, 20);
+    GeometryGenerator::MeshData cylinder = geoGen.CreateCylinder(0.5f, 0.3f, 3.0f, 20, 20);
+    GeometryGenerator::MeshData quad = geoGen.CreateQuad(0.0f, 0.0f, 1.0f, 1.0f, 0.0f);
+
+    //创建vertex和indices资源列表
+    auto totalVertexCount =
+        box.Vertices.size() +
+        grid.Vertices.size() +
+        sphere.Vertices.size() +
+        cylinder.Vertices.size() +
+        quad.Vertices.size();
+
+    std::vector<Vertex> vertices(totalVertexCount);
+
+    UINT k = 0;
+    for (size_t i = 0; i < box.Vertices.size(); ++i, ++k)
+    {
+        vertices[k].Pos = box.Vertices[i].Position;
+        vertices[k].Normal = box.Vertices[i].Normal;
+        vertices[k].TexC = box.Vertices[i].TexC;
+        vertices[k].TangentU = box.Vertices[i].TangentU;
+    }
+
+    for (size_t i = 0; i < grid.Vertices.size(); ++i, ++k)
+    {
+        vertices[k].Pos = grid.Vertices[i].Position;
+        vertices[k].Normal = grid.Vertices[i].Normal;
+        vertices[k].TexC = grid.Vertices[i].TexC;
+        vertices[k].TangentU = grid.Vertices[i].TangentU;
+    }
+
+    for (size_t i = 0; i < sphere.Vertices.size(); ++i, ++k)
+    {
+        vertices[k].Pos = sphere.Vertices[i].Position;
+        vertices[k].Normal = sphere.Vertices[i].Normal;
+        vertices[k].TexC = sphere.Vertices[i].TexC;
+        vertices[k].TangentU = sphere.Vertices[i].TangentU;
+    }
+
+    for (size_t i = 0; i < cylinder.Vertices.size(); ++i, ++k)
+    {
+        vertices[k].Pos = cylinder.Vertices[i].Position;
+        vertices[k].Normal = cylinder.Vertices[i].Normal;
+        vertices[k].TexC = cylinder.Vertices[i].TexC;
+        vertices[k].TangentU = cylinder.Vertices[i].TangentU;
+    }
+
+    for (int i = 0; i < quad.Vertices.size(); ++i, ++k)
+    {
+        vertices[k].Pos = quad.Vertices[i].Position;
+        vertices[k].Normal = quad.Vertices[i].Normal;
+        vertices[k].TexC = quad.Vertices[i].TexC;
+        vertices[k].TangentU = quad.Vertices[i].TangentU;
+    }
+
+    std::vector<std::uint16_t> indices;
+    indices.insert(indices.end(), std::begin(box.GetIndices16()), std::end(box.GetIndices16()));
+    indices.insert(indices.end(), std::begin(grid.GetIndices16()), std::end(grid.GetIndices16()));
+    indices.insert(indices.end(), std::begin(sphere.GetIndices16()), std::end(sphere.GetIndices16()));
+    indices.insert(indices.end(), std::begin(cylinder.GetIndices16()), std::end(cylinder.GetIndices16()));
+    indices.insert(indices.end(), std::begin(quad.GetIndices16()), std::end(quad.GetIndices16()));
+
+    const UINT vbByteSize = (UINT)vertices.size() * sizeof(Vertex);
+    const UINT ibByteSize = (UINT)indices.size() * sizeof(std::uint16_t);
+
+    auto geo = std::make_unique<MeshGeometry>();
+    geo->Name = "shapeGeo";
+    //构建geometry资源通过
+    ThrowIfFailed(D3DCreateBlob(vbByteSize, &geo->VertexBufferCPU));
+    CopyMemory(geo->VertexBufferCPU->GetBufferPointer(), vertices.data(), vbByteSize);
+
+    ThrowIfFailed(D3DCreateBlob(ibByteSize, &geo->IndexBufferCPU));
+    CopyMemory(geo->IndexBufferCPU->GetBufferPointer(), indices.data(), ibByteSize);
+
+    geo->VertexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+        mCommandList.Get(), vertices.data(), vbByteSize, geo->VertexBufferUploader);
+
+    geo->IndexBufferGPU = d3dUtil::CreateDefaultBuffer(md3dDevice.Get(),
+        mCommandList.Get(), indices.data(), ibByteSize, geo->IndexBufferUploader);
+
+    geo->VertexByteStride = sizeof(Vertex);
+    geo->VertexBufferByteSize = vbByteSize;
+    geo->IndexFormat = DXGI_FORMAT_R16_UINT;
+    geo->IndexBufferByteSize = ibByteSize;
+
+    //vertex index offset
+    UINT boxVertexOffset = 0;
+    UINT gridVertexOffset = (UINT)box.Vertices.size();
+    UINT sphereVertexOffset = gridVertexOffset + (UINT)grid.Vertices.size();
+    UINT cylinderVertexOffset = sphereVertexOffset + (UINT)sphere.Vertices.size();
+    UINT quadVertexOffset = cylinderVertexOffset + (UINT)cylinder.Vertices.size();
+
+    //indices index offset
+    UINT boxIndexOffset = 0;
+    UINT gridIndexOffset = (UINT)box.Indices32.size();
+    UINT sphereIndexOffset = gridIndexOffset + (UINT)grid.Indices32.size();
+    UINT cylinderIndexOffset = sphereIndexOffset + (UINT)sphere.Indices32.size();
+    UINT quadIndexOffset = cylinderIndexOffset + (UINT)cylinder.Indices32.size();
+
+    SubmeshGeometry boxSubmesh;
+    boxSubmesh.IndexCount = (UINT)box.Indices32.size();
+    boxSubmesh.StartIndexLocation = boxIndexOffset;
+    boxSubmesh.BaseVertexLocation = boxVertexOffset;
+
+    SubmeshGeometry gridSubmesh;
+    gridSubmesh.IndexCount = (UINT)grid.Indices32.size();
+    gridSubmesh.StartIndexLocation = gridIndexOffset;
+    gridSubmesh.BaseVertexLocation = gridVertexOffset;
+
+    SubmeshGeometry sphereSubmesh;
+    sphereSubmesh.IndexCount = (UINT)sphere.Indices32.size();
+    sphereSubmesh.StartIndexLocation = sphereIndexOffset;
+    sphereSubmesh.BaseVertexLocation = sphereVertexOffset;
+
+    SubmeshGeometry cylinderSubmesh;
+    cylinderSubmesh.IndexCount = (UINT)cylinder.Indices32.size();
+    cylinderSubmesh.StartIndexLocation = cylinderIndexOffset;
+    cylinderSubmesh.BaseVertexLocation = cylinderVertexOffset;
+
+    SubmeshGeometry quadSubmesh;
+    quadSubmesh.IndexCount = (UINT)quad.Indices32.size();
+    quadSubmesh.StartIndexLocation = quadIndexOffset;
+    quadSubmesh.BaseVertexLocation = quadVertexOffset;
+
+    geo->DrawArgs["box"] = boxSubmesh;
+    geo->DrawArgs["grid"] = gridSubmesh;
+    geo->DrawArgs["sphere"] = sphereSubmesh;
+    geo->DrawArgs["cylinder"] = cylinderSubmesh;
+    geo->DrawArgs["quad"] = quadSubmesh;
+
+    mGeometries[geo->Name] = std::move(geo);
+}
+
+void GameEngine :: BuildShadersAndInputLayout() {
+
+    mShaders["standardVS"] = d3dUtil::CompileShader(L"Shaders\\Default.hlsl", nullptr, "VS", "vs_5_1");
+    mShaders["opaquePS"] = d3dUtil::CompileShader(L"Shaders\\Default.hlsl", nullptr, "PS", "ps_5_1");
+
+    mInputLayout =
+    {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 32, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+}
+void GameEngine::BuildFrameResources()
+{
+    for (int i = 0; i < gNumFrameResources; ++i)
+    {
+        mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(),
+            2, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
+    }
+}
+
+
+void GameEngine::BuildRenderItems() {
+    auto boxRitem = std::make_unique<RenderItem>();
+    XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
+    XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
+    boxRitem->ObjCBIndex = 1;
+    boxRitem->Mat = mMaterials["bricks0"].get();
+    boxRitem->Geo = mGeometries["shapeGeo"].get();
+    boxRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;
+    boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].StartIndexLocation;
+    boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].BaseVertexLocation;
+    mAllRitems.push_back(std::move(boxRitem));
+}
+void GameEngine::BuildMaterials() {
+    auto bricks0 = std::make_unique<Material>();
+    bricks0->Name = "bricks0";
+    bricks0->MatCBIndex = 0;
+    bricks0->DiffuseSrvHeapIndex = 0;
+    bricks0->NormalSrvHeapIndex = 1;
+    bricks0->DiffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    bricks0->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+    bricks0->Roughness = 0.3f;
+
+    auto tile0 = std::make_unique<Material>();
+    tile0->Name = "tile0";
+    tile0->MatCBIndex = 2;
+    tile0->DiffuseSrvHeapIndex = 2;
+    tile0->NormalSrvHeapIndex = 3;
+    tile0->DiffuseAlbedo = XMFLOAT4(0.9f, 0.9f, 0.9f, 1.0f);
+    tile0->FresnelR0 = XMFLOAT3(0.2f, 0.2f, 0.2f);
+    tile0->Roughness = 0.1f;
+
+    auto mirror0 = std::make_unique<Material>();
+    mirror0->Name = "mirror0";
+    mirror0->MatCBIndex = 3;
+    mirror0->DiffuseSrvHeapIndex = 4;
+    mirror0->NormalSrvHeapIndex = 5;
+    mirror0->DiffuseAlbedo = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);
+    mirror0->FresnelR0 = XMFLOAT3(0.98f, 0.97f, 0.95f);
+    mirror0->Roughness = 0.1f;
+
+    auto skullMat = std::make_unique<Material>();
+    skullMat->Name = "skullMat";
+    skullMat->MatCBIndex = 3;
+    skullMat->DiffuseSrvHeapIndex = 4;
+    skullMat->NormalSrvHeapIndex = 5;
+    skullMat->DiffuseAlbedo = XMFLOAT4(0.3f, 0.3f, 0.3f, 1.0f);
+    skullMat->FresnelR0 = XMFLOAT3(0.6f, 0.6f, 0.6f);
+    skullMat->Roughness = 0.2f;
+
+    auto sky = std::make_unique<Material>();
+    sky->Name = "sky";
+    sky->MatCBIndex = 4;
+    sky->DiffuseSrvHeapIndex = 6;
+    sky->NormalSrvHeapIndex = 7;
+    sky->DiffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
+    sky->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
+    sky->Roughness = 1.0f;
+
+    mMaterials["bricks0"] = std::move(bricks0);
+    mMaterials["tile0"] = std::move(tile0);
+    mMaterials["mirror0"] = std::move(mirror0);
+    mMaterials["skullMat"] = std::move(skullMat);
+    mMaterials["sky"] = std::move(sky);
+}
+
+void GameEngine::LoadTexture()
+{
+    std::vector<std::string> texNames =
+    {
+        "bricksDiffuseMap",
+        "bricksNormalMap",
+        "tileDiffuseMap",
+        "tileNormalMap",
+        "defaultDiffuseMap",
+        "defaultNormalMap",
+        "skyCubeMap"
+    };
+
+    std::vector<std::wstring> texFilenames =
+    {
+        L"../../Textures/bricks2.dds",
+        L"../../Textures/bricks2_nmap.dds",
+        L"../../Textures/tile.dds",
+        L"../../Textures/tile_nmap.dds",
+        L"../../Textures/white1x1.dds",
+        L"../../Textures/default_nmap.dds",
+        L"../../Textures/sunsetcube1024.dds"
+    };
+
+    for (int i = 0; i < (int)texNames.size(); ++i)
+    {
+        auto texMap = std::make_unique<Texture>();
+        texMap->Name = texNames[i];
+        texMap->Filename = texFilenames[i];
+        ThrowIfFailed(DirectX::CreateDDSTextureFromFile12(md3dDevice.Get(),
+            mCommandList.Get(), texMap->Filename.c_str(),
+            texMap->Resource, texMap->UploadHeap));
+
+        mTextures[texMap->Name] = std::move(texMap);
+    }
+}
+void GameEngine::BuildDescriptorHeaps()
+{
+    D3D12_DESCRIPTOR_HEAP_DESC srvHeapDesc = {};
+    srvHeapDesc.NumDescriptors = 6;
+    srvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+    srvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+    ThrowIfFailed(md3dDevice->CreateDescriptorHeap(&srvHeapDesc, IID_PPV_ARGS(&mSrvDescriptorHeap)));
+
+    CD3DX12_CPU_DESCRIPTOR_HANDLE hDescriptor(mSrvDescriptorHeap->GetCPUDescriptorHandleForHeapStart());
+
+    std::vector<ComPtr<ID3D12Resource>> tex2DList =
+    {
+        mTextures["bricksDiffuseMap"]->Resource,
+        mTextures["bricksNormalMap"]->Resource,
+        mTextures["tileDiffuseMap"]->Resource,
+        mTextures["tileNormalMap"]->Resource,
+        mTextures["defaultDiffuseMap"]->Resource,
+        mTextures["defaultNormalMap"]->Resource
+    };
+
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    for (UINT i = 0; i < (UINT)tex2DList.size(); ++i)
+    {
+        srvDesc.Format = tex2DList[i]->GetDesc().Format;
+        srvDesc.Texture2D.MipLevels = tex2DList[i]->GetDesc().MipLevels;
+        md3dDevice->CreateShaderResourceView(tex2DList[i].Get(), &srvDesc, hDescriptor);
+
+        // next descriptor
+        hDescriptor.Offset(1, mCbvSrvUavDescriptorSize);
+    }
+}
+
+void GameEngine::BuildRootSignature() {
+
+    CD3DX12_DESCRIPTOR_RANGE texTable0;
+    texTable0.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0, 0);
+    CD3DX12_ROOT_PARAMETER slotRootParameter[4];
+
+    slotRootParameter[0].InitAsConstantBufferView(0);
+    slotRootParameter[1].InitAsConstantBufferView(1);
+    slotRootParameter[2].InitAsShaderResourceView(0, 1);
+    slotRootParameter[3].InitAsDescriptorTable(1, &texTable0, D3D12_SHADER_VISIBILITY_PIXEL);
+
+    auto staticSamplers = GetStaticSamplers();
+
+    CD3DX12_ROOT_SIGNATURE_DESC rootSigDesc(4, slotRootParameter,
+        (UINT)staticSamplers.size(), staticSamplers.data(),
+        D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
+    // create a root signature with a single slot which points to a descriptor range consisting of a single constant buffer
+    ComPtr<ID3DBlob> serializedRootSig = nullptr;
+    ComPtr<ID3DBlob> errorBlob = nullptr;
+    HRESULT hr = D3D12SerializeRootSignature(&rootSigDesc, D3D_ROOT_SIGNATURE_VERSION_1,
+        serializedRootSig.GetAddressOf(), errorBlob.GetAddressOf());
+
+    if (errorBlob != nullptr)
+    {
+        ::OutputDebugStringA((char*)errorBlob->GetBufferPointer());
+    }
+    ThrowIfFailed(hr);
+
+    ThrowIfFailed(md3dDevice->CreateRootSignature(
+        0,
+        serializedRootSig->GetBufferPointer(),
+        serializedRootSig->GetBufferSize(),
+        IID_PPV_ARGS(mRootSignature.GetAddressOf())));
+}
+
+std::array<const CD3DX12_STATIC_SAMPLER_DESC, 7> GameEngine::GetStaticSamplers()
+{
+    // Applications usually only need a handful of samplers.  So just define them all up front
+    // and keep them available as part of the root signature.  
+
+    const CD3DX12_STATIC_SAMPLER_DESC pointWrap(
+        0, // shaderRegister
+        D3D12_FILTER_MIN_MAG_MIP_POINT, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP); // addressW
+
+    const CD3DX12_STATIC_SAMPLER_DESC pointClamp(
+        1, // shaderRegister
+        D3D12_FILTER_MIN_MAG_MIP_POINT, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP); // addressW
+
+    const CD3DX12_STATIC_SAMPLER_DESC linearWrap(
+        2, // shaderRegister
+        D3D12_FILTER_MIN_MAG_MIP_LINEAR, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP); // addressW
+
+    const CD3DX12_STATIC_SAMPLER_DESC linearClamp(
+        3, // shaderRegister
+        D3D12_FILTER_MIN_MAG_MIP_LINEAR, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP); // addressW
+
+    const CD3DX12_STATIC_SAMPLER_DESC anisotropicWrap(
+        4, // shaderRegister
+        D3D12_FILTER_ANISOTROPIC, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_WRAP,  // addressW
+        0.0f,                             // mipLODBias
+        8);                               // maxAnisotropy
+
+    const CD3DX12_STATIC_SAMPLER_DESC anisotropicClamp(
+        5, // shaderRegister
+        D3D12_FILTER_ANISOTROPIC, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_CLAMP,  // addressW
+        0.0f,                              // mipLODBias
+        8);                                // maxAnisotropy
+
+    const CD3DX12_STATIC_SAMPLER_DESC shadow(
+        6, // shaderRegister
+        D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT, // filter
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressU
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressV
+        D3D12_TEXTURE_ADDRESS_MODE_BORDER,  // addressW
+        0.0f,                               // mipLODBias
+        16,                                 // maxAnisotropy
+        D3D12_COMPARISON_FUNC_LESS_EQUAL,
+        D3D12_STATIC_BORDER_COLOR_OPAQUE_BLACK);
+
+    return {
+        pointWrap, pointClamp,
+        linearWrap, linearClamp,
+        anisotropicWrap, anisotropicClamp,
+        shadow
+    };
 }

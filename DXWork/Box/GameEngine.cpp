@@ -72,6 +72,7 @@ private:
     virtual void OnMouseDown(WPARAM btnState, int x, int y)override;
     virtual void OnMouseUp(WPARAM btnState, int x, int y)override;
     virtual void OnMouseMove(WPARAM btnState, int x, int y)override;
+    void OnKeyboardInput(const GameTimer& gt);
 
     //GameEngine Initial
     void LoadTexture();
@@ -176,12 +177,16 @@ bool GameEngine::Initialize() {
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
+    mCamera.SetPosition(0.0f, 2.0f, -15.0f);
+
+    LoadTexture();
     BuildGeometry();
     BuildMaterials();
     BuildShadersAndInputLayout();
     BuildDescriptorHeaps();
     BuildRootSignature();
     BuildRenderItems();
+    BuildFrameResources();
     BuildPSO();
 
 
@@ -199,6 +204,8 @@ bool GameEngine::Initialize() {
 
 void GameEngine::OnResize() {
     D3DApp::OnResize();
+
+    mCamera.SetLens(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
 }
 void GameEngine::OnMouseDown(WPARAM btnState, int x, int y) {
 
@@ -209,7 +216,29 @@ void GameEngine::OnMouseUp(WPARAM btnState, int x, int y) {
 void GameEngine::OnMouseMove(WPARAM btnState, int x, int y) {
 
 }
+
+void GameEngine::OnKeyboardInput(const GameTimer& gt)
+{
+    const float dt = gt.DeltaTime();
+
+    if (GetAsyncKeyState('W') & 0x8000)
+        mCamera.Walk(10.0f * dt);
+
+    if (GetAsyncKeyState('S') & 0x8000)
+        mCamera.Walk(-10.0f * dt);
+
+    if (GetAsyncKeyState('A') & 0x8000)
+        mCamera.Strafe(-10.0f * dt);
+
+    if (GetAsyncKeyState('D') & 0x8000)
+        mCamera.Strafe(10.0f * dt);
+
+    mCamera.UpdateViewMatrix();
+}
+
 void GameEngine::Update(const GameTimer& gt) {
+    OnKeyboardInput(gt);
+
     //commit objconstant commit camera and light commit materials
     mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
     mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
@@ -567,9 +596,9 @@ void GameEngine::BuildFrameResources()
 
 void GameEngine::BuildRenderItems() {
     auto boxRitem = std::make_unique<RenderItem>();
-    XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(2.0f, 1.0f, 2.0f) * XMMatrixTranslation(0.0f, 0.5f, 0.0f));
+    XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(10.0f, 3.0f, 5.0f));
     XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
-    boxRitem->ObjCBIndex = 1;
+    boxRitem->ObjCBIndex = 0;
     boxRitem->Mat = mMaterials["bricks0"].get();
     boxRitem->Geo = mGeometries["shapeGeo"].get();
     boxRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
@@ -689,6 +718,10 @@ void GameEngine::BuildDescriptorHeaps()
     };
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
+    srvDesc.Texture2D.MostDetailedMip = 0;
+    srvDesc.Texture2D.ResourceMinLODClamp = 0.0f;
     for (UINT i = 0; i < (UINT)tex2DList.size(); ++i)
     {
         srvDesc.Format = tex2DList[i]->GetDesc().Format;

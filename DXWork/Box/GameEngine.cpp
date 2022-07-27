@@ -177,7 +177,7 @@ bool GameEngine::Initialize() {
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-
+    mCamera.SetPosition(0.0f,2.0f,-15.0f);
     LoadTexture();
     BuildGeometry();
     BuildMaterials();
@@ -608,24 +608,24 @@ void GameEngine::BuildFrameResources()
 
 
 void GameEngine::BuildRenderItems() {
-    /*auto boxRitem = std::make_unique<RenderItem>();
+    auto boxRitem = std::make_unique<RenderItem>();
     XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
     XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
-    boxRitem->ObjCBIndex = 1;
-    boxRitem->Mat = mMaterials["tile0"].get();
+    boxRitem->ObjCBIndex = 0;
+    boxRitem->Mat = mMaterials["bricks0"].get();
     boxRitem->Geo = mGeometries["shapeGeo"].get();
     boxRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;
     boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].StartIndexLocation;
     boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].BaseVertexLocation;
     mRitemLayer[(int)RenderLayer::Opaque].push_back(boxRitem.get());
-    mAllRitems.push_back(std::move(boxRitem));*/
+    mAllRitems.push_back(std::move(boxRitem));
 
     auto gridRitem = std::make_unique<RenderItem>();
     gridRitem->World = MathHelper::Identity4x4();
     XMStoreFloat4x4(&gridRitem->TexTransform, XMMatrixScaling(8.0f, 8.0f, 1.0f));
-    gridRitem->ObjCBIndex = 0;
-    gridRitem->Mat = mMaterials["skullMat"].get();
+    gridRitem->ObjCBIndex = 1;
+    gridRitem->Mat = mMaterials["mirror0"].get();
     gridRitem->Geo = mGeometries["shapeGeo"].get();
     gridRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].IndexCount;

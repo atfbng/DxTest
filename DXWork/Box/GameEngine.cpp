@@ -208,13 +208,27 @@ void GameEngine::OnResize() {
     mCamera.SetLens(0.25f * MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
 }
 void GameEngine::OnMouseDown(WPARAM btnState, int x, int y) {
+    mLastMousePos.x = x;
+    mLastMousePos.y = y;
 
+    SetCapture(mhMainWnd);
 }
 void GameEngine::OnMouseUp(WPARAM btnState, int x, int y) {
-
+    ReleaseCapture();
 }
 void GameEngine::OnMouseMove(WPARAM btnState, int x, int y) {
+    if ((btnState & MK_LBUTTON) != 0)
+    {
+        // Make each pixel correspond to a quarter of a degree.
+        float dx = XMConvertToRadians(0.25f * static_cast<float>(x - mLastMousePos.x));
+        float dy = XMConvertToRadians(0.25f * static_cast<float>(y - mLastMousePos.y));
 
+        mCamera.Pitch(dy);
+        mCamera.RotateY(dx);
+    }
+
+    mLastMousePos.x = x;
+    mLastMousePos.y = y;
 }
 
 void GameEngine::OnKeyboardInput(const GameTimer& gt)
@@ -336,13 +350,13 @@ void GameEngine::UpdateMainPassCB(const GameTimer& gt) {
     mMainPassCB.FarZ = 1000.0f;
     mMainPassCB.TotalTime = gt.TotalTime();
     mMainPassCB.DeltaTime = gt.DeltaTime();
-    mMainPassCB.AmbientLight = { 0.4f, 0.4f, 0.6f, 1.0f };
-    mMainPassCB.Lights[0].Direction = mBaseLightDirections[0];
-    mMainPassCB.Lights[0].Strength = { 0.4f, 0.4f, 0.5f };
-    mMainPassCB.Lights[1].Direction = mBaseLightDirections[1];
-    mMainPassCB.Lights[1].Strength = { 0.1f, 0.1f, 0.1f };
-    mMainPassCB.Lights[2].Direction = mBaseLightDirections[2];
-    mMainPassCB.Lights[2].Strength = { 0.0f, 0.0f, 0.0f };
+    mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
+    mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
+    mMainPassCB.Lights[0].Strength = { 0.8f, 0.8f, 0.8f };
+    mMainPassCB.Lights[1].Direction = { -0.57735f, -0.57735f, 0.57735f };
+    mMainPassCB.Lights[1].Strength = { 0.4f, 0.4f, 0.4f };
+    mMainPassCB.Lights[2].Direction = { 0.0f, -0.707f, -0.707f };
+    mMainPassCB.Lights[2].Strength = { 0.2f, 0.2f, 0.2f };
 
     auto currPassCB = mCurrFrameResource->PassCB.get();
     currPassCB->CopyData(0, mMainPassCB);
@@ -429,8 +443,8 @@ void GameEngine::BuildPSO() {
 
     //PSO for opaque objects.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc = basePsoDesc;
-    opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
-    opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    //opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
+    //opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
 }
 
@@ -595,18 +609,31 @@ void GameEngine::BuildFrameResources()
 
 
 void GameEngine::BuildRenderItems() {
-    auto boxRitem = std::make_unique<RenderItem>();
-    XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(10.0f, 3.0f, 5.0f));
+    /*auto boxRitem = std::make_unique<RenderItem>();
+    XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(2.0f, 2.0f, 2.0f) * XMMatrixTranslation(0.0f, 1.0f, 0.0f));
     XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
-    boxRitem->ObjCBIndex = 0;
-    boxRitem->Mat = mMaterials["bricks0"].get();
+    boxRitem->ObjCBIndex = 1;
+    boxRitem->Mat = mMaterials["tile0"].get();
     boxRitem->Geo = mGeometries["shapeGeo"].get();
     boxRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;
     boxRitem->StartIndexLocation = boxRitem->Geo->DrawArgs["box"].StartIndexLocation;
     boxRitem->BaseVertexLocation = boxRitem->Geo->DrawArgs["box"].BaseVertexLocation;
     mRitemLayer[(int)RenderLayer::Opaque].push_back(boxRitem.get());
-    mAllRitems.push_back(std::move(boxRitem));
+    mAllRitems.push_back(std::move(boxRitem));*/
+
+    auto gridRitem = std::make_unique<RenderItem>();
+    gridRitem->World = MathHelper::Identity4x4();
+    XMStoreFloat4x4(&gridRitem->TexTransform, XMMatrixScaling(8.0f, 8.0f, 1.0f));
+    gridRitem->ObjCBIndex = 0;
+    gridRitem->Mat = mMaterials["skullMat"].get();
+    gridRitem->Geo = mGeometries["shapeGeo"].get();
+    gridRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+    gridRitem->IndexCount = gridRitem->Geo->DrawArgs["grid"].IndexCount;
+    gridRitem->StartIndexLocation = gridRitem->Geo->DrawArgs["grid"].StartIndexLocation;
+    gridRitem->BaseVertexLocation = gridRitem->Geo->DrawArgs["grid"].BaseVertexLocation;
+    mRitemLayer[(int)RenderLayer::Opaque].push_back(gridRitem.get());
+    mAllRitems.push_back(std::move(gridRitem));
 }
 void GameEngine::BuildMaterials() {
     auto bricks0 = std::make_unique<Material>();
@@ -615,12 +642,12 @@ void GameEngine::BuildMaterials() {
     bricks0->DiffuseSrvHeapIndex = 0;
     bricks0->NormalSrvHeapIndex = 1;
     bricks0->DiffuseAlbedo = XMFLOAT4(1.0f, 1.0f, 1.0f, 1.0f);
-    bricks0->FresnelR0 = XMFLOAT3(0.1f, 0.1f, 0.1f);
-    bricks0->Roughness = 0.3f;
+    bricks0->FresnelR0 = XMFLOAT3(0.02f, 0.02f, 0.02f);
+    bricks0->Roughness = 0.1f;
 
     auto tile0 = std::make_unique<Material>();
     tile0->Name = "tile0";
-    tile0->MatCBIndex = 2;
+    tile0->MatCBIndex = 1;
     tile0->DiffuseSrvHeapIndex = 2;
     tile0->NormalSrvHeapIndex = 3;
     tile0->DiffuseAlbedo = XMFLOAT4(0.9f, 0.9f, 0.9f, 1.0f);
@@ -629,7 +656,7 @@ void GameEngine::BuildMaterials() {
 
     auto mirror0 = std::make_unique<Material>();
     mirror0->Name = "mirror0";
-    mirror0->MatCBIndex = 3;
+    mirror0->MatCBIndex = 2;
     mirror0->DiffuseSrvHeapIndex = 4;
     mirror0->NormalSrvHeapIndex = 5;
     mirror0->DiffuseAlbedo = XMFLOAT4(0.0f, 0.0f, 0.0f, 1.0f);

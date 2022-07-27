@@ -177,7 +177,7 @@ bool GameEngine::Initialize() {
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-    mCamera.SetPosition(0.0f, 2.0f, -15.0f);
+    mCamera.SetPosition(0.0f, 5.0f, -15.0f);
 
     LoadTexture();
     BuildGeometry();
@@ -429,8 +429,8 @@ void GameEngine::BuildPSO() {
 
     //PSO for opaque objects.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc = basePsoDesc;
-    opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
-    opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+    //opaquePsoDesc.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_EQUAL;
+    //opaquePsoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
     ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mPSOs["opaque"])));
 }
 
@@ -599,7 +599,7 @@ void GameEngine::BuildRenderItems() {
     XMStoreFloat4x4(&boxRitem->World, XMMatrixScaling(10.0f, 3.0f, 5.0f));
     XMStoreFloat4x4(&boxRitem->TexTransform, XMMatrixScaling(1.0f, 0.5f, 1.0f));
     boxRitem->ObjCBIndex = 0;
-    boxRitem->Mat = mMaterials["bricks0"].get();
+    boxRitem->Mat = mMaterials["tile0"].get();
     boxRitem->Geo = mGeometries["shapeGeo"].get();
     boxRitem->PrimitiveType = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
     boxRitem->IndexCount = boxRitem->Geo->DrawArgs["box"].IndexCount;

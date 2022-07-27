@@ -93,10 +93,9 @@ float4 PS(VertexOut pin) : SV_Target
 	Material mat = { diffuseAlbedo, fresnelR0, shininess };
 	float3 shadowFactor = 1.0f;
 	float4 directLight = ComputeLighting(gLights, mat, pin.PosW,
-		bumpedNormalW, toEyeW, shadowFactor);
+		pin.NormalW, toEyeW, shadowFactor);
 
 	float4 litColor = ambient + directLight;
-
 	// Add in specular reflections.
 	//float3 r = reflect(-toEyeW, bumpedNormalW);
 	//float4 reflectionColor = gCubeMap.Sample(gsamLinearWrap, r);

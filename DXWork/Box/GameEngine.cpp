@@ -177,7 +177,6 @@ bool GameEngine::Initialize() {
     // Reset the command list to prep for initialization commands.
     ThrowIfFailed(mCommandList->Reset(mDirectCmdListAlloc.Get(), nullptr));
 
-    mCamera.SetPosition(0.0f, 2.0f, -15.0f);
 
     LoadTexture();
     BuildGeometry();
